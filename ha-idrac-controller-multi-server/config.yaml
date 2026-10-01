@@ -1,7 +1,7 @@
 # HA-iDRAC/ha-idrac-controller/config.yaml
 
 name: "HA iDRAC Controller Multi Server"
-version: "0.1.0-ms.1" # Incremented version
+version: "0.1.0-ms.10" # Incremented version
 slug: "ha_idrac_controller_multi_server"
 description: "Control Dell iDRAC fan speeds and monitor server health in Home Assistant. Development Version. Not for production use."
 arch:

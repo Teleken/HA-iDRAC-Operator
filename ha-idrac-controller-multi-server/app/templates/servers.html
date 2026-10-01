@@ -40,11 +40,26 @@
                     <input type="password" id="idrac_password" name="idrac_password" required>
                 </div>
                 <div class="form-group">
+                    <label for="privilege_level">IPMI Privilege Level</label>
+                    <select id="privilege_level" name="privilege_level">
+                        <option value="ADMINISTRATOR" selected>Administrator</option>
+                        <option value="OPERATOR">Operator (no fan control)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="fan_control_enabled">Fan Control</label>
+                    <select id="fan_control_enabled" name="fan_control_enabled" onchange="updateFanControlVisibility()">
+                        <option value="true" selected>Enabled</option>
+                        <option value="false">Disabled (Monitor Only)</option>
+                    </select>
+                </div>
+                <div id="fan-settings" class="contents">
+                <div class="form-group">
                     <label for="base_fan_speed_percent">Base Fan Speed (%)</label>
                     <input type="number" id="base_fan_speed_percent" name="base_fan_speed_percent" value="{{ defaults.base_fan_speed_percent }}" min="0" max="100">
                 </div>
                 <div class="form-group">
-                    <label for="low_temp_threshold">Low Temp Threshold (°C)</label>
+                    <label for="low_temp_threshold">Low Temp Threshold (°{{ defaults.temperature_unit or 'C' }})</label>
                     <input type="number" id="low_temp_threshold" name="low_temp_threshold" value="{{ defaults.low_temp_threshold }}" min="0" max="100">
                 </div>
                 <div class="form-group">
@@ -52,8 +67,9 @@
                     <input type="number" id="high_temp_fan_speed_percent" name="high_temp_fan_speed_percent" value="{{ defaults.high_temp_fan_speed_percent }}" min="0" max="100">
                 </div>
                  <div class="form-group">
-                    <label for="critical_temp_threshold">Critical Temp Threshold (°C)</label>
+                    <label for="critical_temp_threshold">Critical Temp Threshold (°{{ defaults.temperature_unit or 'C' }})</label>
                     <input type="number" id="critical_temp_threshold" name="critical_temp_threshold" value="{{ defaults.critical_temp_threshold }}" min="0" max="100">
+                </div>
                 </div>
                 <div class="form-actions">
                     <button type="submit">Add Server</button>
@@ -96,8 +112,17 @@
             </table>
         </div>
     </div>
+    <script>
+        // Hidden inputs still submit, so defaults are preserved for monitor-only servers.
+        function updateFanControlVisibility() {
+            const enabled = document.getElementById('fan_control_enabled').value === 'true';
+            document.getElementById('fan-settings').style.display = enabled ? 'contents' : 'none';
+        }
+        document.addEventListener('DOMContentLoaded', updateFanControlVisibility);
+    </script>
     <style>
         .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1em; }
+        .contents { display: contents; }
         .form-group { display: flex; flex-direction: column; }
         .form-group label { margin-bottom: 0.5em; }
         .form-group input, .form-group select { max-width: none; }

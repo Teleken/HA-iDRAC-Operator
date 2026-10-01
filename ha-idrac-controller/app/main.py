@@ -358,8 +358,6 @@ if __name__ == "__main__":
     load_and_configure(mqtt_handler_instance) # Pass instance to configure it
 
     if addon_options.get("mqtt_host") and addon_options["mqtt_host"] != "YOUR_MQTT_BROKER_IP_OR_HOSTNAME":
-        # Client ID should be unique, can be based on some config or generated
-        mqtt_handler_instance.client_id = f"ha_idrac_controller_{addon_options.get('idrac_ip','unknown').replace('.','_')}"
         mqtt_handler_instance.connect()
     else:
         print("[INFO] MQTT host not configured or is default placeholder. MQTT client will not connect.", flush=True)

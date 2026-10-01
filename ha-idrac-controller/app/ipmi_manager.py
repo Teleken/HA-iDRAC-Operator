@@ -45,14 +45,17 @@ def _run_ipmi_command(args_list, is_raw_command=True, timeout=15):
         command_to_run = base_command + ["raw"] + args_list
     else:
         command_to_run = base_command + args_list
-    
-    _log("debug", f"Executing IPMI command: {' '.join(command_to_run)}")
+
+    # Never let the iDRAC password reach the add-on log.
+    safe_command = " ".join("********" if _IDRAC_PASSWORD and part == _IDRAC_PASSWORD else part for part in command_to_run)
+
+    _log("debug", f"Executing IPMI command: {safe_command}")
 
     try:
         result = subprocess.run(command_to_run, capture_output=True, text=True, check=False, timeout=timeout)
         
         if result.returncode != 0:
-            _log("error", f"IPMI command failed: {' '.join(command_to_run)}")
+            _log("error", f"IPMI command failed: {safe_command}")
             _log("error", f"STDOUT: {result.stdout.strip()}")
             _log("error", f"STDERR: {result.stderr.strip()}")
             return None
@@ -63,7 +66,7 @@ def _run_ipmi_command(args_list, is_raw_command=True, timeout=15):
     except FileNotFoundError:
         _log("error", "ipmitool command not found. Is it installed and in the system PATH?")
     except subprocess.TimeoutExpired:
-        _log("error", f"IPMI command timed out: {' '.join(command_to_run)}")
+        _log("error", f"IPMI command timed out: {safe_command}")
     except Exception as e:
         _log("error", f"An unexpected error occurred with IPMI command: {e}")
     return None

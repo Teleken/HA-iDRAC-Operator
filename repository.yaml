@@ -1,4 +1,4 @@
 # HA-iDRAC/repository.yaml
-name: "Aesgarth's Custom iDRAC Add-on, Teleken Op Mod"  # You can name your repository collection
+name: "Aesgarth's Custom iDRAC Add-on, Teleken Op Mod, Louis' Mod"  # You can name your repository collection
 url: "https://github.com/Teleken/HA-iDRAC-Operator" # The URL of your repository
 maintainer: "Teleken" # Your GitHub username or name

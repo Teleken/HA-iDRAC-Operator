@@ -1,43 +1,84 @@
 # HA-iDRAC/ha-idrac-controller-dev/app/ipmi_manager.py
 import subprocess
+import os
 import time
 import re
 
 class IPMIManager:
-    def __init__(self, ip, user, password, conn_type="lanplus", log_level="info"):
+    def __init__(self, ip, user, password, conn_type="lanplus", log_level="info", privilege_level="ADMINISTRATOR", sdr_cache_dir="/data"):
         self.ip = ip
         self.user = user
         self.password = password
         self.log_level = log_level.lower()
+        self.privilege_level = (privilege_level or "ADMINISTRATOR").upper()
+        self.sdr_cache_path = os.path.join(sdr_cache_dir, f"sdr_cache_{re.sub(r'[^0-9A-Za-z]+', '_', str(ip))}.bin") if ip else None
         self.base_args = self._build_base_args(conn_type)
-        self._log("info", f"IPMI Manager initialized for host: {self.ip}")
+        self._log("info", f"IPMI Manager initialized for host: {self.ip} (privilege: {self.privilege_level})")
 
     def _build_base_args(self, conn_type):
         if conn_type.lower() in ["local", "open"]:
             return ["-I", "open"]
         else:
-            return ["-I", "lanplus", "-H", self.ip, "-U", self.user, "-P", self.password]
+            return ["-I", "lanplus", "-H", self.ip, "-U", self.user, "-P", self.password, "-L", self.privilege_level]
 
     def _log(self, level, message):
         levels = {"trace": -1, "debug": 0, "info": 1, "warning": 2, "error": 3, "fatal": 4}
         if levels.get(self.log_level, levels["info"]) <= levels.get(level.lower(), levels["info"]):
             print(f"[{level.upper()}] IPMI ({self.ip}): {message}", flush=True)
 
-    def _run_ipmi_command(self, args_list, is_raw_command=True, timeout=15):
+    def _redacted(self, command_list):
+        """Never let the iDRAC password reach the add-on log."""
+        return " ".join("********" if self.password and part == self.password else part for part in command_list)
+
+    def _fan_control_permitted(self):
+        if self.privilege_level != "ADMINISTRATOR":
+            self._log("info", f"Skipping manual fan control. Dell fan profile overrides require ADMINISTRATOR privileges (current: {self.privilege_level}).")
+            return False
+        return True
+
+    def ensure_sdr_cache(self, force=False):
+        """Without a cache ipmitool re-reads the whole SDR repository on every call, which is slow on large chassis."""
+        if not self.sdr_cache_path:
+            return False
+        if not force and os.path.exists(self.sdr_cache_path):
+            return True
+
+        self._log("info", "Building local SDR cache (one-off, may take a minute on a large chassis)...")
+        result = self._run_ipmi_command(["sdr", "dump", self.sdr_cache_path], is_raw_command=False, timeout=120, use_sdr_cache=False)
+        if result is None:
+            self._log("warning", "Could not build SDR cache. Sensor reads will stay slow.")
+            self.invalidate_sdr_cache(quiet=True)
+            return False
+        self._log("info", f"SDR cache written to {self.sdr_cache_path}")
+        return True
+
+    def invalidate_sdr_cache(self, quiet=False):
+        if self.sdr_cache_path and os.path.exists(self.sdr_cache_path):
+            try:
+                os.remove(self.sdr_cache_path)
+                if not quiet:
+                    self._log("info", "Discarded SDR cache.")
+            except OSError as e:
+                self._log("warning", f"Could not remove SDR cache: {e}")
+
+    def _run_ipmi_command(self, args_list, is_raw_command=True, timeout=15, use_sdr_cache=True):
         if not self.base_args:
             self._log("error", "IPMI not configured.")
             return None
 
         base_command = ["ipmitool"] + self.base_args
+        if use_sdr_cache and self.sdr_cache_path and os.path.exists(self.sdr_cache_path):
+            base_command += ["-S", self.sdr_cache_path]
         command_to_run = base_command + (["raw"] + args_list if is_raw_command else args_list)
+        safe_command = self._redacted(command_to_run)
         
-        self._log("debug", f"Executing command: {' '.join(command_to_run)}")
+        self._log("debug", f"Executing command: {safe_command}")
 
         try:
             result = subprocess.run(command_to_run, capture_output=True, text=True, check=False, timeout=timeout)
             
             if result.returncode != 0:
-                self._log("error", f"Command failed: {' '.join(command_to_run)}")
+                self._log("error", f"Command failed: {safe_command}")
                 self._log("error", f"STDOUT: {result.stdout.strip()}")
                 self._log("error", f"STDERR: {result.stderr.strip()}")
                 return None
@@ -48,7 +89,7 @@ class IPMIManager:
         except FileNotFoundError:
             self._log("error", "ipmitool command not found. Is it installed and in the system PATH?")
         except subprocess.TimeoutExpired:
-            self._log("error", f"Command timed out: {' '.join(command_to_run)}")
+            self._log("error", f"Command timed out: {safe_command}")
         except Exception as e:
             self._log("error", f"An unexpected error occurred with command: {e}")
         return None
@@ -65,10 +106,14 @@ class IPMIManager:
             return "0x00"
 
     def apply_dell_fan_control_profile(self):
+        if not self._fan_control_permitted():
+            return None
         self._log("info", "Applying Dell default dynamic fan control.")
         return self._run_ipmi_command(["0x30", "0x30", "0x01", "0x01"])
 
     def apply_user_fan_control_profile(self, decimal_fan_speed):
+        if not self._fan_control_permitted():
+            return None
         hex_fan_speed = self._decimal_to_hex_for_ipmi(decimal_fan_speed)
         self._log("info", f"Applying user static fan control: {decimal_fan_speed}% ({hex_fan_speed})")
         
@@ -121,7 +166,7 @@ class IPMIManager:
 
     def retrieve_temperatures_raw(self):
         self._log("debug", "Retrieving raw temperature SDR data...")
-        return self._run_ipmi_command(["sdr", "type", "temperature"], is_raw_command=False)
+        return self._run_ipmi_command(["sdr", "type", "temperature"], is_raw_command=False, timeout=30)
 
     def parse_temperatures(self, sdr_data, cpu_pattern_str, inlet_pattern_str, exhaust_pattern_str):
         temps = {"cpu_temps": [], "inlet_temp": None, "exhaust_temp": None}
@@ -145,7 +190,7 @@ class IPMIManager:
 
     def retrieve_fan_rpms_raw(self):
         self._log("debug", "Retrieving raw fan SDR data...")
-        return self._run_ipmi_command(["sdr", "type", "fan"], is_raw_command=False, timeout=10)
+        return self._run_ipmi_command(["sdr", "type", "fan"], is_raw_command=False, timeout=30)
 
     def parse_fan_rpms(self, sdr_data):
         fans = []
@@ -165,13 +210,14 @@ class IPMIManager:
 
     def retrieve_power_sdr_raw(self):
         self._log("debug", "Retrieving raw power SDR data...")
-        return self._run_ipmi_command(["sdr", "elist"], is_raw_command=False, timeout=20)
+        return self._run_ipmi_command(["sdr", "elist"], is_raw_command=False, timeout=45)
 
     def parse_power_consumption(self, sdr_data):
         if not sdr_data:
             return None
         
-        power_line_regex = re.compile(r"^(Pwr Consumption.*?)\s*\|.*?\s*([\d\.]+)\s*Watts", re.IGNORECASE)
+        # iDRAC 6 reports power as "System Level"; iDRAC 7+ as "Pwr Consumption".
+        power_line_regex = re.compile(r"^(Pwr Consumption|System Level.*?)\s*\|.*?\s*([\d\.]+)\s*Watts", re.IGNORECASE)
         for line in sdr_data.splitlines():
             match = power_line_regex.search(line)
             if match:
@@ -221,6 +267,21 @@ class IPMIManager:
             self._log("debug", f"PSU Status for {name}: Present={data.get('present', False)}, Voltage={data.get('voltage', 0)}, Fault={data.get('fault', True)} -> Final OK={is_ok}")
         
         return final_status
+
+    def chassis_power_control(self, action):
+        """Sends an IPMI chassis power command (e.g. 'on', 'soft', 'off', 'cycle', 'reset', 'status')."""
+        valid_actions = ["on", "off", "soft", "cycle", "reset", "status"]
+        action_clean = str(action).strip().lower()
+        if action_clean not in valid_actions:
+            self._log("warning", f"Invalid chassis power action '{action}'. Valid actions: {valid_actions}")
+            return None
+        self._log("info", f"Sending chassis power {action_clean} command to server...")
+        return self._run_ipmi_command(["chassis", "power", action_clean], is_raw_command=False)
+
+    def chassis_power_on(self):
+        """Sends a power on command to the server."""
+        self._log("info", "Sending power on command to server...")
+        return self._run_ipmi_command(["chassis", "power", "on"], is_raw_command=False)
 
     def chassis_shutdown(self):
         """Sends a graceful ACPI shutdown command to the server."""

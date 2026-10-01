@@ -4,17 +4,31 @@ import os
 import time
 import json
 import re # For sanitizing fan names
+import uuid
+
+
+def build_unique_client_id(base_id):
+    """Two add-on instances sharing an MQTT client id get kicked off the broker in a loop."""
+    host = re.sub(r'[^a-zA-Z0-9_-]+', '', os.getenv("HOSTNAME", ""))[-24:]
+    parts = [base_id]
+    if host:
+        parts.append(host)
+    parts.append(uuid.uuid4().hex[:8])
+    return "_".join(parts)
+
 
 class MqttClient:
     def __init__(self, client_id="ha_idrac_controller"):
-        self.client_id = client_id
+        self.client_id = build_unique_client_id(client_id)
         self.client = mqtt.Client(client_id=self.client_id, protocol=mqtt.MQTTv311)
+        self.client.reconnect_delay_set(min_delay=1, max_delay=120)
         self.broker_address = "core-mosquitto" # Default, will be overridden by main.py
         self.port = 1883
         self.username = ""
         self.password = ""
         self.is_connected = False
         self.device_info_dict = None # This will be set by main.py after server_info is fetched
+        self.availability_topic = "ha_idrac_controller/status" # Re-scoped per device in set_device_info
         self.log_level = "info" # Default, can be updated from main.py
 
         self.client.on_connect = self.on_connect
@@ -23,7 +37,7 @@ class MqttClient:
     def _log(self, level, message):
         levels = {"trace": -1, "debug": 0, "info": 1, "warning": 2, "error": 3, "fatal": 4}
         if levels.get(self.log_level, levels["info"]) <= levels.get(level.lower(), levels["info"]):
-            print(f"[{level.upper()}] MQTT: {message}", flush=True)
+            print(f"[{level.upper()}] MQTT ({self.client_id}): {message}", flush=True)
 
     def configure_broker(self, host, port, username, password, log_level="info"):
         self.broker_address = host
@@ -42,6 +56,7 @@ class MqttClient:
             "model": model or "HA iDRAC Controller",
             "manufacturer": manufacturer or "HA Add-on" # Changed from Aesgarth for generality
         }
+        self.availability_topic = f"ha_idrac_controller/{self.device_info_dict['identifiers'][0]}/status"
         self._log("info", f"Device info for MQTT discovery set to: {self.device_info_dict}")
 
 
@@ -55,7 +70,7 @@ class MqttClient:
                 status_config_topic = f"homeassistant/binary_sensor/idrac_controller_{self.device_info_dict['identifiers'][0]}/status/config"
                 status_config_payload = {
                     "name": "iDRAC Controller Connectivity",
-                    "state_topic": "ha_idrac_controller/status",
+                    "state_topic": self.availability_topic,
                     "unique_id": f"idrac_controller_{self.device_info_dict['identifiers'][0]}_connectivity",
                     "device_class": "connectivity",
                     "payload_on": "online",
@@ -63,7 +78,7 @@ class MqttClient:
                     "device": self.device_info_dict
                 }
                 self.publish(status_config_topic, json.dumps(status_config_payload), retain=True)
-            self.publish("ha_idrac_controller/status", "online", retain=True)
+            self.publish(self.availability_topic, "online", retain=True)
 
             # Static sensor discoveries (non-CPU, non-FanRPM which are dynamic)
             self.publish_static_sensor_discoveries()
@@ -79,7 +94,7 @@ class MqttClient:
         if not self.is_connected:
             self._log("info", f"Attempting to connect to broker {self.broker_address}:{self.port}...")
             try:
-                self.client.will_set("ha_idrac_controller/status", payload="offline", qos=1, retain=True)
+                self.client.will_set(self.availability_topic, payload="offline", qos=1, retain=True)
                 self.client.connect(self.broker_address, self.port, 60)
                 self.client.loop_start() 
             except ConnectionRefusedError:
@@ -139,7 +154,7 @@ class MqttClient:
             "state_topic": f"{state_topic_base}/{config_topic_slug_part}/state",
             "unique_id": base_unique_id,
             "device": self.device_info_dict,
-            "availability_topic": "ha_idrac_controller/status",
+            "availability_topic": self.availability_topic,
             "payload_available": "online",
             "payload_not_available": "offline"
         }

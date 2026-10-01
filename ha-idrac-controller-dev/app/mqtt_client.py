@@ -1,12 +1,27 @@
 # HA-iDRAC/ha-idrac-controller-dev/app/mqtt_client.py
 import paho.mqtt.client as mqtt
 import json
+import os
 import re
+import uuid
+
+
+def build_unique_client_id(base_id):
+    """Two add-on instances sharing an MQTT client id get kicked off the broker in a loop."""
+    safe_base = re.sub(r'[^a-zA-Z0-9_-]+', '_', base_id)
+    host = re.sub(r'[^a-zA-Z0-9_-]+', '', os.getenv("HOSTNAME", ""))[-24:]
+    parts = [safe_base]
+    if host:
+        parts.append(host)
+    parts.append(uuid.uuid4().hex[:8])
+    return "_".join(parts)
+
 
 class MqttClient:
     def __init__(self, client_id="ha_idrac_controller"):
-        self.client_id = client_id
+        self.client_id = build_unique_client_id(client_id)
         self.client = mqtt.Client(client_id=self.client_id, protocol=mqtt.MQTTv311)
+        self.client.reconnect_delay_set(min_delay=1, max_delay=120)
         self.broker_address = "core-mosquitto"
         self.port = 1883
         self.username = ""

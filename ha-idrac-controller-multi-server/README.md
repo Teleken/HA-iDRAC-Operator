@@ -32,7 +32,7 @@ This add-on connects to your servers' iDRAC interfaces using IPMI to:
     * PSU Status (OK/Problem)
     * Server Connectivity (Online/Offline)
 * **Remote Actions:**
-    * **Graceful Shutdown:** A "Shutdown Server" button is created for each server in Home Assistant.
+    * **Power Control:** "Power On Server" and "Shutdown Server" buttons are created for each server in Home Assistant.
 * **Web UI via Ingress:**
     * View a live dashboard of all monitored servers.
     * A dedicated "Manage Servers" page to add, edit, and delete servers and configure their fan control settings.
@@ -98,6 +98,7 @@ The Web UI is the primary interface for this add-on:
 
 For each server, the add-on will create a new device in Home Assistant with the following entities:
 * **Controls:**
+    * `button.idrac_server_alias_power_on_server`
     * `button.idrac_server_alias_shutdown_server`
 * **Sensors:**
     * `binary_sensor.idrac_server_alias_status` (Online/Offline)
